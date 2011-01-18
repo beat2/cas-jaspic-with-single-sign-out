@@ -168,9 +168,6 @@ public class CasServerAuthModule implements ServerAuthModule {
 	 */
 	public AuthStatus validateRequest(MessageInfo msgInfo,
 			Subject clientSubject, Subject serverSubject) throws AuthException {
-		if (!this.requestPolicy.isMandatory()) {
-			return SUCCESS;
-		}
 		HttpServletRequest request = (HttpServletRequest) msgInfo
 				.getRequestMessage();
 		HttpServletResponse response = (HttpServletResponse) msgInfo
@@ -181,6 +178,9 @@ public class CasServerAuthModule implements ServerAuthModule {
 					.getAttribute(CONST_CAS_ASSERTION);
 			if (assertion != null) {
 				setAuthenticationResult(assertion, clientSubject, msgInfo);
+				return SUCCESS;
+			}
+			if (!this.requestPolicy.isMandatory()) {
 				return SUCCESS;
 			}
 			String ticket = CommonUtils.safeGetParameter(request,
