@@ -168,6 +168,9 @@ public class CasServerAuthModule implements ServerAuthModule {
 	 */
 	public AuthStatus validateRequest(MessageInfo msgInfo,
 			Subject clientSubject, Subject serverSubject) throws AuthException {
+		if (!this.requestPolicy.isMandatory()) {
+			return SUCCESS;
+		}
 		HttpServletRequest request = (HttpServletRequest) msgInfo
 				.getRequestMessage();
 		HttpServletResponse response = (HttpServletResponse) msgInfo
@@ -183,10 +186,12 @@ public class CasServerAuthModule implements ServerAuthModule {
 			String ticket = CommonUtils.safeGetParameter(request,
 					this.artifactParameterName);
 			if (ticket == null || ticket.length() == 0) {
-				return sendRedirect(request, response);
+				response.sendRedirect(constructRedirectUrl(request, response));
+				return SEND_CONTINUE;
 			}
+			String serviceUrl = constructServiceUrl(request, response);
 			LoginContext lc = new LoginContext(this.jaasContext,
-					new ServiceAndTicketCallbackHandler(service, ticket));
+					new ServiceAndTicketCallbackHandler(serviceUrl, ticket));
 			lc.login();
 			Subject subject = lc.getSubject();
 			for (Principal p : subject.getPrincipals()) {
@@ -195,7 +200,9 @@ public class CasServerAuthModule implements ServerAuthModule {
 					session.setAttribute(CONST_CAS_ASSERTION, assertion);
 					if (this.redirectAfterValidation) {
 						logger.fine("Redirecting after successful ticket validation.");
-						return sendRedirect(request, response);
+						
+						response.sendRedirect(constructServiceUrl(request, response));
+						return SEND_CONTINUE;
 					}
 					setAuthenticationResult(assertion, clientSubject, msgInfo);
 					return SUCCESS;
@@ -206,7 +213,8 @@ public class CasServerAuthModule implements ServerAuthModule {
 			if (e.getCause() instanceof TicketValidationException) {
 				logger.warning(e.getMessage());
 				try {
-					return sendRedirect(request, response);
+					response.sendRedirect(constructRedirectUrl(request, response));
+					return SEND_CONTINUE;
 				} catch (IOException ioe) {
 					logger.throwing(CasServerAuthModule.class.getName(),
 							"validateRequest", ioe);
@@ -242,8 +250,9 @@ public class CasServerAuthModule implements ServerAuthModule {
 				}
 			}
 			if (groups.size() > 0) {
+				String[] group = new String[groups.size()];
 				this.handler.handle(new Callback[]{ new GroupPrincipalCallback(
-						subject, (String[]) groups.toArray()) });
+						subject, (String[])groups.toArray(group)) });
 			}
 		}
 	}
@@ -255,10 +264,12 @@ public class CasServerAuthModule implements ServerAuthModule {
 				this.encodeServiceUrl);
 	}
 
-	private AuthStatus sendRedirect(HttpServletRequest request,
-			HttpServletResponse response) throws IOException {
-		response.sendRedirect(constructServiceUrl(request, response));
-		return SEND_CONTINUE;
+	private String constructRedirectUrl(HttpServletRequest request,
+			HttpServletResponse response) {
+		return CommonUtils.constructRedirectUrl(this.casServerLoginUrl,
+				this.serviceParameterName,
+				constructServiceUrl(request, response), this.renew,
+				this.gateway);
 	}
 
 }
