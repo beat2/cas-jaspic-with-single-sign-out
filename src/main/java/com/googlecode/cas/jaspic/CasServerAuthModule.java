@@ -19,6 +19,7 @@ import javax.security.auth.callback.Callback;
 import javax.security.auth.callback.CallbackHandler;
 import javax.security.auth.callback.UnsupportedCallbackException;
 import javax.security.auth.login.LoginContext;
+import javax.security.auth.login.LoginException;
 import javax.security.auth.message.AuthException;
 import javax.security.auth.message.AuthStatus;
 import javax.security.auth.message.MessageInfo;
@@ -27,6 +28,7 @@ import javax.security.auth.message.callback.CallerPrincipalCallback;
 import javax.security.auth.message.callback.GroupPrincipalCallback;
 import javax.security.auth.message.module.ServerAuthModule;
 import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletRequestWrapper;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
@@ -78,6 +80,8 @@ public class CasServerAuthModule implements ServerAuthModule {
 	private String defaultGroups[] = null;
 	private String groupAttributeNames[] = null;
 
+	private LoginContext lc;
+
 	public CasServerAuthModule() {
 	}
 
@@ -115,6 +119,17 @@ public class CasServerAuthModule implements ServerAuthModule {
 			throws AuthException {
 		if (subject != null) {
 			subject.getPrincipals().clear();
+		}
+		if (this.lc != null) {
+			try {
+				this.lc.logout();
+			} catch (LoginException e) {
+				logger.throwing(CasServerAuthModule.class.getName(),
+						"cleanSubject", e);
+				AuthException ae = new AuthException();
+				ae.initCause(e);
+				throw ae;
+			}
 		}
 	}
 
@@ -177,20 +192,28 @@ public class CasServerAuthModule implements ServerAuthModule {
 			Assertion assertion = (Assertion) session
 					.getAttribute(CONST_CAS_ASSERTION);
 			if (assertion != null) {
+				if (this.redirectAfterValidation) {
+					String ticket = getTicket(request);
+					if (ticket != null) {
+						logger.fine("Redirecting after check assertion.");
+						response.sendRedirect(constructServiceUrl(request,
+								response));
+						return SEND_CONTINUE;
+					}
+				}
 				setAuthenticationResult(assertion, clientSubject, msgInfo);
 				return SUCCESS;
 			}
 			if (!this.requestPolicy.isMandatory()) {
 				return SUCCESS;
 			}
-			String ticket = CommonUtils.safeGetParameter(request,
-					this.artifactParameterName);
+			String ticket = getTicket(request);
 			if (ticket == null || ticket.length() == 0) {
 				response.sendRedirect(constructRedirectUrl(request, response));
 				return SEND_CONTINUE;
 			}
 			String serviceUrl = constructServiceUrl(request, response);
-			LoginContext lc = new LoginContext(this.jaasContext,
+			this.lc = new LoginContext(this.jaasContext,
 					new ServiceAndTicketCallbackHandler(serviceUrl, ticket));
 			lc.login();
 			Subject subject = lc.getSubject();
@@ -200,8 +223,8 @@ public class CasServerAuthModule implements ServerAuthModule {
 					session.setAttribute(CONST_CAS_ASSERTION, assertion);
 					if (this.redirectAfterValidation) {
 						logger.fine("Redirecting after successful ticket validation.");
-						
-						response.sendRedirect(constructServiceUrl(request, response));
+						response.sendRedirect(constructServiceUrl(request,
+								response));
 						return SEND_CONTINUE;
 					}
 					setAuthenticationResult(assertion, clientSubject, msgInfo);
@@ -213,7 +236,9 @@ public class CasServerAuthModule implements ServerAuthModule {
 			if (e.getCause() instanceof TicketValidationException) {
 				logger.warning(e.getMessage());
 				try {
-					response.sendRedirect(constructRedirectUrl(request, response));
+					logger.fine("Redirecting because of an invalid ticket.");
+					response.sendRedirect(constructRedirectUrl(request,
+							response));
 					return SEND_CONTINUE;
 				} catch (IOException ioe) {
 					logger.throwing(CasServerAuthModule.class.getName(),
@@ -226,6 +251,11 @@ public class CasServerAuthModule implements ServerAuthModule {
 			ae.initCause(e);
 			throw ae;
 		}
+	}
+
+	private String getTicket(HttpServletRequest request) {
+		return CommonUtils
+				.safeGetParameter(request, this.artifactParameterName);
 	}
 
 	@SuppressWarnings("unchecked")
@@ -252,7 +282,7 @@ public class CasServerAuthModule implements ServerAuthModule {
 			if (groups.size() > 0) {
 				String[] group = new String[groups.size()];
 				this.handler.handle(new Callback[]{ new GroupPrincipalCallback(
-						subject, (String[])groups.toArray(group)) });
+						subject, (String[]) groups.toArray(group)) });
 			}
 		}
 	}
