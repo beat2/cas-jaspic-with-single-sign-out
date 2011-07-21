@@ -1,5 +1,13 @@
 package com.googlecode.cas.jaspic.servlet;
 
+import static com.googlecode.cas.jaspic.util.Constants.AUTH_TYPE_HTTP_SERVLET;
+import static com.googlecode.cas.jaspic.util.Constants.PROPERTY_CAS_SERVER_LOGIN_URL;
+import static com.googlecode.cas.jaspic.util.Constants.PROPERTY_CAS_SERVER_URL_PREFIX;
+import static com.googlecode.cas.jaspic.util.Constants.PROPERTY_DEFAULT_GROUPS;
+import static com.googlecode.cas.jaspic.util.Constants.PROPERTY_GROUP_ATTRIBUTE_NAMES;
+import static com.googlecode.cas.jaspic.util.Constants.PROPERTY_JAAS_CONTEXT;
+import static com.googlecode.cas.jaspic.util.Constants.PROPERTY_SERVER_NAME;
+import static com.googlecode.cas.jaspic.util.Constants.PROPERTY_SERVICE;
 import static javax.security.auth.message.AuthStatus.SEND_CONTINUE;
 import static javax.security.auth.message.AuthStatus.SEND_FAILURE;
 import static javax.security.auth.message.AuthStatus.SEND_SUCCESS;
@@ -28,30 +36,22 @@ import javax.security.auth.message.callback.CallerPrincipalCallback;
 import javax.security.auth.message.callback.GroupPrincipalCallback;
 import javax.security.auth.message.module.ServerAuthModule;
 import javax.servlet.http.HttpServletRequest;
-import javax.servlet.http.HttpServletRequestWrapper;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
 import org.jasig.cas.client.jaas.AssertionPrincipal;
 import org.jasig.cas.client.jaas.ServiceAndTicketCallbackHandler;
+import org.jasig.cas.client.util.AssertionHolder;
 import org.jasig.cas.client.util.CommonUtils;
 import org.jasig.cas.client.validation.Assertion;
 import org.jasig.cas.client.validation.TicketValidationException;
 
+/**
+ * @author hisaaki
+ * 
+ */
 @SuppressWarnings({ "rawtypes", "unused" })
 public class CasServerAuthModule implements ServerAuthModule {
-
-	private static final String AUTH_TYPE_INFO_KEY = "javax.servlet.http.authType";
-
-	private static final String PROPERTY_SERVER_NAME = "serverName";
-	private static final String PROPERTY_SERVICE = "service";
-	private static final String PROPERTY_ARTIFACT_PARAMATER_NAME = "artifactParameterName";
-	private static final String PROPERTY_SERVICE_PARAMATER_NAME = "serviceParameterName";
-	private static final String PROPERTY_CAS_SERVER_URL_PREFIX = "casServerUrlPrefix";
-	private static final String PROPERTY_CAS_SERVER_LOGIN_URL = "casServerLoginUrl";
-	private static final String PROPERTY_JAAS_CONTEXT = "jaas-context";
-	private static final String PROPERTY_DEFAULT_GROUPS = "defaultGroups";
-	private static final String PROPERTY_GROUP_ATTRIBUTE_NAMES = "groupAttributeNames";
 
 	private static final Class[] supportedMessageTypes = new Class[]{
 			HttpServletRequest.class, HttpServletResponse.class };
@@ -62,7 +62,7 @@ public class CasServerAuthModule implements ServerAuthModule {
 	private MessagePolicy requestPolicy;
 	private MessagePolicy responsePolicy;
 	private CallbackHandler handler;
-	private Map options;
+	private Map properties;
 
 	private String service = null;
 	private String serverName = null;
@@ -106,6 +106,7 @@ public class CasServerAuthModule implements ServerAuthModule {
 	 */
 	public AuthStatus secureResponse(MessageInfo msgInfo, Subject service)
 			throws AuthException {
+		AssertionHolder.clear();
 		return SEND_SUCCESS;
 	}
 
@@ -142,30 +143,31 @@ public class CasServerAuthModule implements ServerAuthModule {
 	 * javax.security.auth.callback.CallbackHandler, java.util.Map)
 	 */
 	public void initialize(MessagePolicy requestPolicy,
-			MessagePolicy responsePolicy, CallbackHandler handler, Map options)
-			throws AuthException {
+			MessagePolicy responsePolicy, CallbackHandler handler,
+			Map properties) throws AuthException {
 		this.requestPolicy = requestPolicy;
 		this.responsePolicy = responsePolicy;
 		this.handler = handler;
-		this.options = options;
-		if (options != null) {
-			this.service = (String) options.get(PROPERTY_SERVICE);
-			this.serverName = (String) options.get(PROPERTY_SERVER_NAME);
-			this.casServerUrlPrefix = (String) options
+		this.properties = properties;
+		if (properties != null) {
+			this.service = (String) properties.get(PROPERTY_SERVICE);
+			this.serverName = (String) properties.get(PROPERTY_SERVER_NAME);
+			this.casServerUrlPrefix = (String) properties
 					.get(PROPERTY_CAS_SERVER_URL_PREFIX);
-			this.casServerLoginUrl = (String) options
+			this.casServerLoginUrl = (String) properties
 					.get(PROPERTY_CAS_SERVER_LOGIN_URL);
-			if (options.containsKey(PROPERTY_JAAS_CONTEXT)) {
-				this.jaasContext = (String) options.get(PROPERTY_JAAS_CONTEXT);
+			if (properties.containsKey(PROPERTY_JAAS_CONTEXT)) {
+				this.jaasContext = (String) properties
+						.get(PROPERTY_JAAS_CONTEXT);
 			}
-			if (options.containsKey(PROPERTY_DEFAULT_GROUPS)) {
-				String value = (String) options.get(PROPERTY_DEFAULT_GROUPS);
+			if (properties.containsKey(PROPERTY_DEFAULT_GROUPS)) {
+				String value = (String) properties.get(PROPERTY_DEFAULT_GROUPS);
 				if (value != null) {
 					this.defaultGroups = value.split(",\\s*");
 				}
 			}
-			if (options.containsKey(PROPERTY_GROUP_ATTRIBUTE_NAMES)) {
-				String value = (String) options
+			if (properties.containsKey(PROPERTY_GROUP_ATTRIBUTE_NAMES)) {
+				String value = (String) properties
 						.get(PROPERTY_GROUP_ATTRIBUTE_NAMES);
 				if (value != null) {
 					this.groupAttributeNames = value.split(",\\s*");
@@ -262,10 +264,11 @@ public class CasServerAuthModule implements ServerAuthModule {
 	private void setAuthenticationResult(Assertion assertion, Subject subject,
 			MessageInfo m) throws IOException, UnsupportedCallbackException {
 		if (assertion != null) {
+			AssertionHolder.setAssertion(assertion);
 			Principal principal = assertion.getPrincipal();
 			this.handler.handle(new Callback[]{ new CallerPrincipalCallback(
 					subject, principal) });
-			m.getMap().put(AUTH_TYPE_INFO_KEY,
+			m.getMap().put(AUTH_TYPE_HTTP_SERVLET,
 					CasServerAuthModule.class.getName());
 			List groups = new ArrayList();
 			if (this.defaultGroups != null) {
