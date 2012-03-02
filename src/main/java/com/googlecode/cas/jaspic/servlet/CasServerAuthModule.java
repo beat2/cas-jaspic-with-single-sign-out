@@ -18,6 +18,11 @@ import java.io.IOException;
 import java.security.Principal;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Calendar;
+import java.util.Collection;
+import java.util.Date;
+import java.util.GregorianCalendar;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.logging.Logger;
@@ -46,6 +51,8 @@ import org.jasig.cas.client.util.CommonUtils;
 import org.jasig.cas.client.validation.Assertion;
 import org.jasig.cas.client.validation.TicketValidationException;
 
+import com.googlecode.cas.jaspic.session.SessionHandler;
+
 /**
  * @author hisaaki
  * 
@@ -53,7 +60,7 @@ import org.jasig.cas.client.validation.TicketValidationException;
 @SuppressWarnings({ "rawtypes", "unused" })
 public class CasServerAuthModule implements ServerAuthModule {
 
-	private static final Class[] supportedMessageTypes = new Class[]{
+	private static final Class[] supportedMessageTypes = new Class[] {
 			HttpServletRequest.class, HttpServletResponse.class };
 
 	private static Logger logger = Logger.getLogger(CasServerAuthModule.class
@@ -80,6 +87,11 @@ public class CasServerAuthModule implements ServerAuthModule {
 	private String defaultGroups[] = null;
 	private String groupAttributeNames[] = null;
 
+	/**
+	 * We are trying to share one storage of HttpSessions between the
+	 * jaspic-module and the session listener configured in the web application.
+	 */
+	private static SessionHandler sessionHandler = new SessionHandler();
 	private LoginContext lc;
 
 	public CasServerAuthModule() {
@@ -90,6 +102,7 @@ public class CasServerAuthModule implements ServerAuthModule {
 
 	/*
 	 * (non-Javadoc)
+	 * 
 	 * @see
 	 * javax.security.auth.message.module.ServerAuthModule#getSupportedMessageTypes
 	 * ()
@@ -100,6 +113,7 @@ public class CasServerAuthModule implements ServerAuthModule {
 
 	/*
 	 * (non-Javadoc)
+	 * 
 	 * @see
 	 * javax.security.auth.message.ServerAuth#secureResponse(javax.security.
 	 * auth.message.MessageInfo, javax.security.auth.Subject)
@@ -112,6 +126,7 @@ public class CasServerAuthModule implements ServerAuthModule {
 
 	/*
 	 * (non-Javadoc)
+	 * 
 	 * @see
 	 * javax.security.auth.message.ServerAuth#cleanSubject(javax.security.auth
 	 * .message.MessageInfo, javax.security.auth.Subject)
@@ -136,6 +151,7 @@ public class CasServerAuthModule implements ServerAuthModule {
 
 	/*
 	 * (non-Javadoc)
+	 * 
 	 * @see
 	 * javax.security.auth.message.module.ServerAuthModule#initialize(javax.
 	 * security.auth.message.MessagePolicy,
@@ -178,6 +194,7 @@ public class CasServerAuthModule implements ServerAuthModule {
 
 	/*
 	 * (non-Javadoc)
+	 * 
 	 * @see
 	 * javax.security.auth.message.ServerAuth#validateRequest(javax.security
 	 * .auth.message.MessageInfo, javax.security.auth.Subject,
@@ -191,6 +208,7 @@ public class CasServerAuthModule implements ServerAuthModule {
 				.getResponseMessage();
 		HttpSession session = request.getSession();
 		try {
+			// *** logged in already *** ? validates ticket ?
 			Assertion assertion = (Assertion) session
 					.getAttribute(CONST_CAS_ASSERTION);
 			if (assertion != null) {
@@ -206,14 +224,60 @@ public class CasServerAuthModule implements ServerAuthModule {
 				setAuthenticationResult(assertion, clientSubject, msgInfo);
 				return SUCCESS;
 			}
+			// *** not protected *** user does not have to login
 			if (!this.requestPolicy.isMandatory()) {
 				return SUCCESS;
 			}
+
+			// *** logout *** SAML Logout-Request sent from CAS-Server
+			String logoutTicket = request.getParameter("logoutRequest");
+			if (logoutTicket != null) {
+
+				sessionHandler.destroySession(request);
+				logger.fine("destroying session for ticket: " + logoutTicket);
+
+				// every time we get a logout, we try to find really old
+				// sessions to cleanup
+				Collection<HttpSession> allSessions = sessionHandler
+						.getSessionMappingStorage().getAllSessions();
+				Date now = new Date();
+				for (Iterator<HttpSession> it = allSessions.iterator(); it
+						.hasNext();) {
+
+					HttpSession httpSession = it.next();
+
+					try {
+						Date last = new Date(httpSession.getLastAccessedTime());
+						Calendar validUntil = new GregorianCalendar();
+						validUntil.setTime(last);
+						// grant them 24 hours of inactivity, after that we
+						// remove the session
+						validUntil.add(Calendar.HOUR_OF_DAY, 24);
+
+						if (now.after(validUntil.getTime())) {
+							logger.fine("removing session with id: "
+									+ httpSession.getId());
+							httpSession.invalidate();
+							it.remove();
+						}
+					} catch (IllegalStateException iex) {
+						// this is thrown if a session is already invalidated,
+						// just remove it
+						it.remove();
+					}
+
+				}
+
+				return SUCCESS;
+			}
+			// *** no ticket *** user must send credentials
 			String ticket = getTicket(request);
 			if (ticket == null || ticket.length() == 0) {
 				response.sendRedirect(constructRedirectUrl(request, response));
 				return SEND_CONTINUE;
 			}
+
+			// *** login *** user has sent credentials
 			String serviceUrl = constructServiceUrl(request, response);
 			this.lc = new LoginContext(this.jaasContext,
 					new ServiceAndTicketCallbackHandler(serviceUrl, ticket));
@@ -223,6 +287,9 @@ public class CasServerAuthModule implements ServerAuthModule {
 				if (p instanceof AssertionPrincipal) {
 					assertion = ((AssertionPrincipal) p).getAssertion();
 					session.setAttribute(CONST_CAS_ASSERTION, assertion);
+
+					sessionHandler.recordSession(request);
+
 					if (this.redirectAfterValidation) {
 						logger.fine("Redirecting after successful ticket validation.");
 						response.sendRedirect(constructServiceUrl(request,
@@ -266,7 +333,7 @@ public class CasServerAuthModule implements ServerAuthModule {
 		if (assertion != null) {
 			AssertionHolder.setAssertion(assertion);
 			Principal principal = assertion.getPrincipal();
-			this.handler.handle(new Callback[]{ new CallerPrincipalCallback(
+			this.handler.handle(new Callback[] { new CallerPrincipalCallback(
 					subject, principal) });
 			m.getMap().put(AUTH_TYPE_HTTP_SERVLET,
 					CasServerAuthModule.class.getName());
@@ -276,16 +343,22 @@ public class CasServerAuthModule implements ServerAuthModule {
 			}
 			if (this.groupAttributeNames != null) {
 				for (String key : groupAttributeNames) {
-					String value = (String) assertion.getAttributes().get(key);
-					if (value != null) {
-						groups.addAll(Arrays.asList(value.split(",\\s*")));
+					Object value = (Object) assertion.getPrincipal()
+							.getAttributes().get(key);
+
+					if (value != null && value instanceof String) {
+						groups.add((String) value);
+					} else if (value != null) {
+						List<String> roles = (List<String>) value;
+						groups.addAll(roles);
 					}
 				}
 			}
 			if (groups.size() > 0) {
 				String[] group = new String[groups.size()];
-				this.handler.handle(new Callback[]{ new GroupPrincipalCallback(
-						subject, (String[]) groups.toArray(group)) });
+				this.handler
+						.handle(new Callback[] { new GroupPrincipalCallback(
+								subject, (String[]) groups.toArray(group)) });
 			}
 		}
 	}
